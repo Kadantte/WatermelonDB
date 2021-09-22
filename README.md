@@ -26,7 +26,7 @@
 | 📈 | **Highly scalable** from hundreds to tens of thousands of records |
 | 😎 | **Lazy loaded**. Only load data when you need it |
 | 🔄 | **Offline-first.** [Sync](https://nozbe.github.io/WatermelonDB/Advanced/Sync.html) with your own backend |
-| 📱 | **Multiplatform**. iOS, Android, and the web |
+| 📱 | **Multiplatform**. iOS, Android, web, and Node.js |
 | ⚛️ | **Works with React.** Easily plug data into components |
 | ⏱ | **Fast.** And getting faster with every release! |
 | ✅ | **Proven.** Powers [Nozbe Teams](https://nozbe.com/teams) since 2017 (and [many others](#who-uses-watermelondb)) |
@@ -93,7 +93,7 @@ const Post = ({ post, comments }) => (
     <Text>{post.name}</Text>
     <Text>Comments:</Text>
     {comments.map(comment =>
-      <Comment key={comment.id} comment={comment} />
+      <EnhancedComment key={comment.id} comment={comment} />
     )}
   </View>
 )
@@ -155,6 +155,13 @@ The result is fully reactive! Whenever a post or comment is added, changed, or r
   <a href="https://sportsrecruits.com/">
     <img src="https://github.com/Nozbe/WatermelonDB/raw/master/assets/apps/sportsrecruits-logo.png" alt="SportsRecruits" width="300" />
   </a>
+
+  <br>
+
+  <a href="https://chatable.io/">
+    <img src="https://github.com/Nozbe/WatermelonDB/raw/master/assets/apps/chatable_logo.png" alt="Chatable" width="300" />
+  </a>
+
   <br>
 
 _Does your company or app use 🍉? Open a pull request and add your logo/icon with link here!_

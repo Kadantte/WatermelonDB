@@ -4,32 +4,22 @@
 
 ### BREAKING CHANGES
 
-### Deprecations
+- `Q.experimentalSortBy`, `Q.experimentalSkip`, `Q.experimentalTake` have been renamed to `Q.sortBy`, `Q.skip`, `Q.take` respectively
+- **RxJS has been updated to 7.3.0**. If you're not importing from `rxjs` in your app, this doesn't apply to you. If you are, read RxJS 7 breaking changes: https://rxjs.dev/deprecations/breaking-changes
 
-- [LokiJS] `Q.unsafeLokiFilter` is now deprecated and will be removed in a future version.
-    Use `Q.unsafeLokiTransform((raws, loki) => raws.filter(raw => ...))` instead.
+### Deprecations
 
 ### New features
 
-### Performance
+- **sortBy, skip, take** are now available in LokiJSAdapter as well
 
-- Removed dependency on rambdax and made the util library smaller
-- Faster withObservables
+### Performance
 
 ### Changes
 
-- Synchronization: `pushChanges` is optional, will not calculate local changes if not specified.
-- withObservables is now a dependency of WatermelonDB for simpler installation and consistent updates. You can (and generally should) delete `@nozbe/with-observables` from your app's package.json
-- [Docs] Add advanced tutorial to share database across iOS targets - @thiagobrez
-- [Sqlite] Allowed callbacks (within the migrationEvents object) to be passed so as to track the migration events status ( onStart, onSuccess, onError ) - @avinashlng1080
-- [Sqlite] Added a dev-only `Query._sql()` method for quickly extracting SQL from Queries for debugging purposes
-
 ### Fixes
 
-- Fixed incorrect reference to `process`, which can break apps in some environments (e.g. webpack5)
-- Fixed a race condition when using standard fetch methods alongside `Collection.unsafeFetchRecordsWithSQL` - @jspizziri
-- withObservables shouldn't cause any RxJS issues anymore as it no longer imports RxJS
-- [Typescript] Added `onSetUpError` and `onIndexedDBFetchStart` fields to `LokiAdapterOptions`; fixes TS error - @3DDario
-- [Typescript] Removed duplicated identifiers `useWebWorker` and `useIncrementalIndexedDB` in `LokiAdapterOptions` - @3DDario
+- Fixes an issue when using Headless JS on Android with JSI mode enabled - pass `usesExclusiveLocking: true` to SQLiteAdapter to enable
+- Fixes Typescript annotations for Collection and adapters/sqlite
 
 ### Internal
