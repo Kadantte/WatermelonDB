@@ -15,6 +15,7 @@ export type DirtyQueryResult = Array<RecordId | DirtyRaw>
 export function validateAdapter(adapter: DatabaseAdapter): void {
   if (process.env.NODE_ENV !== 'production') {
     const { schema, migrations } = adapter
+    invariant(schema, `Missing schema in the adapter`)
     // TODO: uncomment when full migrations are shipped
     // invariant(migrations, `Missing migrations`)
     if (migrations) {
@@ -40,6 +41,7 @@ export function validateAdapter(adapter: DatabaseAdapter): void {
 
 export function validateTable(tableName: TableName<any>, schema: AppSchema): void {
   invariant(
+    // $FlowFixMe
     Object.prototype.hasOwnProperty.call(schema.tables, tableName),
     `Could not invoke Adapter method because table name '${tableName}' does not exist in the schema. Most likely, it's a sync bug, and you're sending tables that don't exist in the current version of the app. Or, you made a mistake in migrations. Reminder: it's a serious programming error to pass non-whitelisted table names to Adapter.`,
   )
@@ -58,7 +60,7 @@ export function sanitizeQueryResult(
   dirtyRecords: DirtyQueryResult,
   tableSchema: TableSchema,
 ): CachedQueryResult {
-  return dirtyRecords.map(dirtyRecord =>
+  return dirtyRecords.map((dirtyRecord) =>
     typeof dirtyRecord === 'string' ? dirtyRecord : sanitizedRaw(dirtyRecord, tableSchema),
   )
 }
@@ -66,7 +68,7 @@ export function sanitizeQueryResult(
 export function devSetupCallback(result: Result<any>, onSetUpError: ?(error: Error) => void): void {
   if (result.error) {
     logger.error(
-      `[WatermelonDB] Uh-oh. Database failed to load, we're in big trouble. This might happen if you didn't set up native code correctly (iOS, Android), or if you didn't recompile native app after WatermelonDB update. It might also mean that IndexedDB or SQLite refused to open.`,
+      `Uh-oh. Database failed to load, we're in big trouble. This might happen if you didn't set up native code correctly (iOS, Android), or if you didn't recompile native app after WatermelonDB update. It might also mean that IndexedDB or SQLite refused to open.`,
       result.error,
     )
     onSetUpError && onSetUpError(result.error)

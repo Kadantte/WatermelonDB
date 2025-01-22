@@ -9,7 +9,7 @@ import type Query from '../Query/index'
 type TimestampsObj = $Exact<{ created_at?: number, updated_at?: number }>
 export const createTimestampsFor = (model: Model): TimestampsObj => {
   const date = Date.now()
-  const timestamps = {}
+  const timestamps: $Shape<TimestampsObj> = {}
 
   if ('createdAt' in model) {
     timestamps.created_at = date
@@ -19,7 +19,7 @@ export const createTimestampsFor = (model: Model): TimestampsObj => {
     timestamps.updated_at = date
   }
 
-  return (timestamps: any)
+  return timestamps
 }
 
 function getChildrenQueries(model: Model): Query<Model>[] {
@@ -32,13 +32,20 @@ function getChildrenQueries(model: Model): Query<Model>[] {
   return childrenQueries
 }
 
-export async function fetchChildren(model: Model): Promise<Model[]> {
-  const childPromise = async query => {
+async function fetchDescendantsInner(model: Model): Promise<Model[]> {
+  const childPromise = async (query: Query<Model>) => {
     const children = await query.fetch()
-    const grandchildren = await allPromises(fetchChildren, children)
+    const grandchildren = await allPromises(fetchDescendantsInner, children)
     return unnest(grandchildren).concat(children)
   }
   const childrenQueries = getChildrenQueries(model)
   const results = await allPromises(childPromise, childrenQueries)
   return unnest(results)
+}
+
+export async function fetchDescendants(model: Model): Promise<Model[]> {
+  const descendants = await fetchDescendantsInner(model)
+  // We need to deduplicate because we can have a child accessible through multiple parents
+  // TODO: Use fp/unique after updating it not to suck
+  return Array.from(new Set(descendants))
 }

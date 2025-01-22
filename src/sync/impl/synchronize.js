@@ -11,25 +11,22 @@ import {
   setLastPulledSchemaVersion,
   getMigrationInfo,
 } from './index'
-import {
-  ensureActionsEnabled,
-  ensureSameDatabase,
-  isChangeSetEmpty,
-  changeSetCount,
-} from './helpers'
-import { type SyncArgs } from '../index'
+import { ensureSameDatabase, isChangeSetEmpty, changeSetCount } from './helpers'
+import type { SyncArgs, Timestamp, SyncPullStrategy } from '../index'
 
 export default async function synchronize({
   database,
   pullChanges,
+  onWillApplyRemoteChanges,
+  onDidPullChanges,
   pushChanges,
   sendCreatedAsUpdated = false,
   migrationsEnabledAtVersion,
   log,
   conflictResolver,
   _unsafeBatchPerCollection,
+  unsafeTurbo,
 }: SyncArgs): Promise<void> {
-  ensureActionsEnabled(database)
   const resetCount = database._resetCount
   log && (log.startedAt = new Date())
   log && (log.phase = 'starting')
@@ -49,35 +46,71 @@ export default async function synchronize({
   log && (log.phase = 'ready to pull')
 
   // $FlowFixMe
-  const { changes: remoteChanges, timestamp: newLastPulledAt } = await pullChanges({
+  const pullResult = await pullChanges({
     lastPulledAt,
     schemaVersion,
     migration,
   })
-  log && (log.newLastPulledAt = newLastPulledAt)
-  log && (log.remoteChangeCount = changeSetCount(remoteChanges))
   log && (log.phase = 'pulled')
-  invariant(
-    typeof newLastPulledAt === 'number' && newLastPulledAt > 0,
-    `pullChanges() returned invalid timestamp ${newLastPulledAt}. timestamp must be a non-zero number`,
-  )
 
-  await database.action(async action => {
+  let newLastPulledAt: Timestamp = (pullResult: any).timestamp
+  const remoteChangeCount = pullResult.changes ? changeSetCount(pullResult.changes) : NaN
+
+  if (onWillApplyRemoteChanges) {
+    await onWillApplyRemoteChanges({ remoteChangeCount })
+  }
+
+  await database.write(async () => {
     ensureSameDatabase(database, resetCount)
     invariant(
       lastPulledAt === (await getLastPulledAt(database)),
       '[Sync] Concurrent synchronization is not allowed. More than one synchronize() call was running at the same time, and the later one was aborted before committing results to local database.',
     )
-    await action.subAction(() =>
-      applyRemoteChanges(
-        database,
-        remoteChanges,
+
+    if (unsafeTurbo) {
+      invariant(
+        !_unsafeBatchPerCollection,
+        'unsafeTurbo must not be used with _unsafeBatchPerCollection',
+      )
+      invariant(
+        'syncJson' in pullResult || 'syncJsonId' in pullResult,
+        'missing syncJson/syncJsonId',
+      )
+      invariant(lastPulledAt === null, 'unsafeTurbo can only be used as the first sync')
+
+      const syncJsonId = pullResult.syncJsonId || Math.floor(Math.random() * 1000000000)
+
+      if (pullResult.syncJson) {
+        await database.adapter.provideSyncJson(syncJsonId, pullResult.syncJson)
+      }
+
+      const resultRest = await database.adapter.unsafeLoadFromSync(syncJsonId)
+      newLastPulledAt = resultRest.timestamp
+      onDidPullChanges && onDidPullChanges(resultRest)
+    }
+
+    log && (log.newLastPulledAt = newLastPulledAt)
+    invariant(
+      typeof newLastPulledAt === 'number' && newLastPulledAt > 0,
+      `pullChanges() returned invalid timestamp ${newLastPulledAt}. timestamp must be a non-zero number`,
+    )
+
+    if (!unsafeTurbo) {
+      // $FlowFixMe
+      const { changes: remoteChanges, ...resultRest } = pullResult
+      log && (log.remoteChangeCount = remoteChangeCount)
+      // $FlowFixMe
+      await applyRemoteChanges(remoteChanges, {
+        db: database,
+        strategy: ((pullResult: any).experimentalStrategy: ?SyncPullStrategy),
         sendCreatedAsUpdated,
         log,
         conflictResolver,
         _unsafeBatchPerCollection,
-      ),
-    )
+      })
+      onDidPullChanges && onDidPullChanges(resultRest)
+    }
+
     log && (log.phase = 'applied remote changes')
     await setLastPulledAt(database, newLastPulledAt)
 
@@ -97,11 +130,13 @@ export default async function synchronize({
     ensureSameDatabase(database, resetCount)
     if (!isChangeSetEmpty(localChanges.changes)) {
       log && (log.phase = 'ready to push')
-      await pushChanges({ changes: localChanges.changes, lastPulledAt: newLastPulledAt })
+      const pushResult =
+        (await pushChanges({ changes: localChanges.changes, lastPulledAt: newLastPulledAt })) || {}
       log && (log.phase = 'pushed')
+      log && (log.rejectedIds = pushResult.experimentalRejectedIds)
 
       ensureSameDatabase(database, resetCount)
-      await markLocalChangesAsSynced(database, localChanges)
+      await markLocalChangesAsSynced(database, localChanges, pushResult.experimentalRejectedIds)
       log && (log.phase = 'marked local changes as synced')
     }
   } else {
