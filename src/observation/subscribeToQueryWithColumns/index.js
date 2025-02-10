@@ -53,17 +53,9 @@ export default function subscribeToQueryWithColumns<Record: Model>(
   let observedRecords: Record[] = []
   const recordStates = new Map<RecordId, RecordState>()
 
-  const emitCopy = records => {
+  const emitCopy = (records: Array<Record>) => {
     !unsubscribed && subscriber(records.slice(0))
   }
-
-  // prepare source observable
-  // TODO: On one hand it would be nice to bring in the source logic to this function to optimize
-  // on the other, it would be good to have source provided as Observable, not Query
-  // so that we can reuse cached responses -- but they don't have compatible format
-  const [subscribeToSource, asyncSource] = canEncodeMatcher(query.description)
-    ? [observer => subscribeToSimpleQuery(query, observer, true), false]
-    : [observer => subscribeToQueryReloading(query, observer, true), false]
 
   // NOTE:
   // Observing both the source subscription and changes to columns is very tricky
@@ -78,10 +70,26 @@ export default function subscribeToQueryWithColumns<Record: Model>(
   // workaround to solve a race condition - collection observation for column check will always
   // emit first, but we don't know if the list of observed records isn't about to change, so we
   // flag, and wait for source response.
+  //
+  // FIXME: The above explanation is outdated in practice because modern WatermelonDB uses synchronous
+  // adapters... However, JSI on Android isn't yet fully shipped (so this is currently broken), and
+  // we may get back to some asynchronicity where appropriate...
+
+  // prepare source observable
+  // TODO: On one hand it would be nice to bring in the source logic to this function to optimize
+  // on the other, it would be good to have source provided as Observable, not Query
+  // so that we can reuse cached responses -- but they don't have compatible format
+  const canUseSimpleObservation = canEncodeMatcher(query.description)
+  const subscribeToSource = canUseSimpleObservation
+    ? (observer: (recordsOrStatus: Array<Record>) => void) =>
+        subscribeToSimpleQuery(query, observer, true)
+    : (observer) => subscribeToQueryReloading(query, observer, true)
+  const asyncSource = !canUseSimpleObservation
 
   // Observe changes to records we have on the list
   const debugInfo = { name: 'subscribeToQueryWithColumns', query, columnNames }
   const collectionUnsubscribe = query.collection.experimentalSubscribe(
+    // eslint-disable-next-line prefer-arrow-callback
     function observeWithColumnsCollectionChanged(changeSet: CollectionChangeSet<Record>): void {
       let hasColumnChanges = false
       // Can't use `Array.some`, because then we'd skip saving record state for relevant records
@@ -117,6 +125,7 @@ export default function subscribeToQueryWithColumns<Record: Model>(
   )
 
   // Observe the source records list (list of records matching a query)
+  // eslint-disable-next-line prefer-arrow-callback
   const sourceUnsubscribe = subscribeToSource(function observeWithColumnsSourceChanged(
     recordsOrStatus,
   ): void {
@@ -141,12 +150,12 @@ export default function subscribeToQueryWithColumns<Record: Model>(
     observedRecords = records
 
     // Unsubscribe from records removed from list
-    removed.forEach(record => {
+    removed.forEach((record) => {
       recordStates.delete(record.id)
     })
 
     // Save current record state for later comparison
-    added.forEach(newRecord => {
+    added.forEach((newRecord) => {
       recordStates.set(newRecord.id, getRecordState(newRecord, columnNames))
     })
 

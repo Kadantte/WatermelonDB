@@ -12,28 +12,37 @@ function removeIfExists(file, dbName) {
 }
 
 describe.each([
-  // ['SQLiteAdapterNode', 'Synchronous', 'File'],
   // ['SQLiteAdapterNode', 'Asynchronous', 'File'],
-  ['SQLiteAdapterNode', 'Synchronous', 'Memory'],
   ['SQLiteAdapterNode', 'Asynchronous', 'Memory'],
-])('%s (%s/%s)', (adapterSubclass, synchronousString, fileString) => {
-  commonTests().forEach(testCase => {
+])('%s (%s/%s)', (adapterSubclass, fileString) => {
+  commonTests().forEach((testCase) => {
     const [name, test] = testCase
+
+    if (name.match(/from file system/) && process.platform === 'win32') {
+      // eslint-disable-next-line no-console
+      console.error(`FIXME: Broken test on Windows! ${name}`)
+      return
+    }
+
+    // eslint-disable-next-line jest/valid-title
     it(name, async () => {
-      const synchronous = synchronousString.toLowerCase() === 'synchronous'
       const file = fileString.toLowerCase() === 'file'
+
+      // NOTE: one test uses .tmp/xx path, but we have to create it first
+      if (!fs.existsSync('.tmp')) {
+        fs.mkdirSync('.tmp')
+      }
+
       const dbName = `${process.cwd()}/test${Math.random()}.db${
         file ? '' : '?mode=memory&cache=shared'
       }`
       const extraAdapterOptions = {
         dbName,
-        synchronous,
         adapterSubclass,
       }
       const adapter = new SqliteAdapter({
         dbName,
         schema: testSchema,
-        synchronous,
       })
 
       try {

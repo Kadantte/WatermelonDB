@@ -1,7 +1,7 @@
 #pragma once
 
-#import <string>
-#import <sqlite3.h>
+#include <string>
+#include <sqlite3.h>
 
 namespace watermelondb {
 
@@ -10,11 +10,15 @@ class SqliteDb {
 public:
     SqliteDb(std::string path);
     ~SqliteDb();
+    void destroy();
 
     sqlite3 *sqlite;
 
     SqliteDb &operator=(const SqliteDb &) = delete;
     SqliteDb(const SqliteDb &) = delete;
+
+private:
+    bool isDestroyed_;
 };
 
 class SqliteStatement {

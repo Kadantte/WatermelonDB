@@ -1,91 +1,132 @@
 // @flow
 /* eslint-disable global-require */
 
-import { NativeModules } from 'react-native'
-import { fromPairs } from '../../../utils/fp'
-
+import { NativeModules, Platform } from 'react-native'
 import { type ConnectionTag, logger, invariant } from '../../../utils/common'
-
-import { fromPromise } from '../../../utils/fp/Result'
-
+import { fromPromise, type ResultCallback } from '../../../utils/fp/Result'
 import type {
   DispatcherType,
   SQLiteAdapterOptions,
-  NativeDispatcher,
-  NativeBridgeType,
+  SqliteDispatcher,
+  SqliteDispatcherMethod,
+  SqliteDispatcherOptions,
 } from '../type'
 
-import { syncReturnToResult } from '../common'
+const { WMDatabaseBridge, WMDatabaseJSIBridge } = NativeModules
 
-const { DatabaseBridge }: { DatabaseBridge: NativeBridgeType } = NativeModules
+class SqliteNativeModulesDispatcher implements SqliteDispatcher {
+  _tag: ConnectionTag
+  _unsafeNativeReuse: boolean
+  _bridge: any
 
-export { DatabaseBridge }
+  constructor(
+    tag: ConnectionTag,
+    bridge: any,
+    { experimentalUnsafeNativeReuse }: SqliteDispatcherOptions,
+  ): void {
+    this._tag = tag
+    this._bridge = bridge
+    this._unsafeNativeReuse = experimentalUnsafeNativeReuse
+    if (process.env.NODE_ENV !== 'production') {
+      invariant(
+        this._bridge,
+        `NativeModules.WMDatabaseBridge is not defined! This means that you haven't properly linked WatermelonDB native module. Refer to docs for instructions about installation (and the changelog if this happened after an upgrade).`,
+      )
 
-const dispatcherMethods = [
-  'initialize',
-  'setUpWithSchema',
-  'setUpWithMigrations',
-  'find',
-  'query',
-  'count',
-  'batch',
-  'batchJSON',
-  'getDeletedRecords',
-  'destroyDeletedRecords',
-  'unsafeResetDatabase',
-  'getLocal',
-  'setLocal',
-  'removeLocal',
-]
+      invariant(
+        Platform.OS !== 'windows',
+        'Windows is only supported via JSI. Pass { jsi: true } to SQLiteAdapter constructor.',
+      )
+    }
+  }
+
+  call(name: SqliteDispatcherMethod, _args: any[], callback: ResultCallback<any>): void {
+    let methodName: string = name
+    let args = _args
+    if (methodName === 'batch' && this._bridge.batchJSON) {
+      methodName = 'batchJSON'
+      args = [JSON.stringify(args[0])]
+    } else if (
+      ['initialize', 'setUpWithSchema', 'setUpWithMigrations'].includes(methodName) &&
+      Platform.OS === 'android'
+    ) {
+      // FIXME: Hacky, refactor once native reuse isn't an "unsafe experimental" option
+      args.push(this._unsafeNativeReuse)
+    }
+    fromPromise(this._bridge[methodName](this._tag, ...args), callback)
+  }
+}
+
+class SqliteJsiDispatcher implements SqliteDispatcher {
+  _db: any
+  _unsafeErrorListener: (Error) => void // debug hook for NT use
+
+  constructor(dbName: string, { usesExclusiveLocking }: SqliteDispatcherOptions): void {
+    this._db = global.nativeWatermelonCreateAdapter(dbName, usesExclusiveLocking)
+    this._unsafeErrorListener = () => {}
+  }
+
+  call(name: SqliteDispatcherMethod, _args: any[], callback: ResultCallback<any>): void {
+    let methodName: string = name
+    let args = _args
+
+    if (methodName === 'query' && !global.HermesInternal) {
+      // NOTE: compressing results of a query into a compact array makes querying 15-30% faster on JSC
+      // but actually 9% slower on Hermes (presumably because Hermes has faster C++ JSI and slower JS execution)
+      methodName = 'queryAsArray'
+    } else if (methodName === 'batch') {
+      methodName = 'batchJSON'
+      args = [JSON.stringify(args[0])]
+    } else if (
+      Platform.OS === 'windows' &&
+      (methodName === 'provideSyncJson' || methodName === 'unsafeLoadFromSync')
+    ) {
+      callback({ error: new Error(`${methodName} unavailable on Windows. Please contribute.`) })
+    } else if (methodName === 'provideSyncJson') {
+      fromPromise(WMDatabaseBridge.provideSyncJson(...args), callback)
+      return
+    }
+
+    try {
+      const method = this._db[methodName]
+      if (!method) {
+        throw new Error(
+          `Cannot run database method ${methodName} because database failed to open. Hint: Did you install JSI correctly? This happens if you forgot to configure Proguard correctly ${Object.keys(
+            this._db,
+          ).join(',')}`,
+        )
+      }
+      let result = method(...args)
+      // On Android, errors are returned, not thrown - see DatabaseBridge.cpp
+      if (result instanceof Error) {
+        throw result
+      } else {
+        if (methodName === 'queryAsArray') {
+          result = require('./decodeQueryResult').default(result)
+        }
+        callback({ value: result })
+      }
+    } catch (error) {
+      this._unsafeErrorListener(error)
+      callback({ error })
+    }
+  }
+}
 
 export const makeDispatcher = (
   type: DispatcherType,
   tag: ConnectionTag,
   dbName: string,
-): NativeDispatcher => {
-  const jsiDb = type === 'jsi' && global.nativeWatermelonCreateAdapter(dbName)
-
-  const methods = dispatcherMethods.map(methodName => {
-    // batchJSON is missing on Android
-    if (!DatabaseBridge[methodName] || (methodName === 'batchJSON' && jsiDb)) {
-      return [methodName, undefined]
-    }
-
-    const name = type === 'synchronous' ? `${methodName}Synchronous` : methodName
-
-    return [
-      methodName,
-      (...args) => {
-        const callback = args[args.length - 1]
-        const otherArgs = args.slice(0, -1)
-
-        if (jsiDb) {
-          try {
-            const value =
-              methodName === 'query' || methodName === 'count'
-                ? jsiDb[methodName](...otherArgs, []) // FIXME: temp workaround
-                : jsiDb[methodName](...otherArgs)
-            callback({ value })
-          } catch (error) {
-            callback({ error })
-          }
-          return
-        }
-
-        // $FlowFixMe
-        const returnValue = DatabaseBridge[name](tag, ...otherArgs)
-
-        if (type === 'synchronous') {
-          callback(syncReturnToResult((returnValue: any)))
-        } else {
-          fromPromise(returnValue, callback)
-        }
-      },
-    ]
-  })
-
-  const dispatcher: any = fromPairs(methods)
-  return dispatcher
+  options: SqliteDispatcherOptions,
+): SqliteDispatcher => {
+  switch (type) {
+    case 'jsi':
+      return new SqliteJsiDispatcher(dbName, options)
+    case 'asynchronous':
+      return new SqliteNativeModulesDispatcher(tag, WMDatabaseBridge, options)
+    default:
+      throw new Error('Unknown DispatcherType')
+  }
 }
 
 const initializeJSI = () => {
@@ -93,34 +134,25 @@ const initializeJSI = () => {
     return true
   }
 
-  if (DatabaseBridge.initializeJSI) {
+  const bridge = WMDatabaseBridge
+  if (bridge.initializeJSI) {
     try {
-      DatabaseBridge.initializeJSI()
+      bridge.initializeJSI()
       return !!global.nativeWatermelonCreateAdapter
     } catch (e) {
-      logger.error('[WatermelonDB][SQLite] Failed to initialize JSI')
+      logger.error('[SQLite] Failed to initialize JSI')
       logger.error(e)
     }
+  } else if (WMDatabaseJSIBridge && WMDatabaseJSIBridge.install) {
+    WMDatabaseJSIBridge.install()
+    return !!global.nativeWatermelonCreateAdapter
   }
 
   return false
 }
 
 export function getDispatcherType(options: SQLiteAdapterOptions): DispatcherType {
-  invariant(
-    !(options.synchronous && options.experimentalUseJSI),
-    '`synchronous` and `experimentalUseJSI` SQLiteAdapter options are mutually exclusive',
-  )
-
-  if (options.synchronous) {
-    if (DatabaseBridge.initializeSynchronous) {
-      return 'synchronous'
-    }
-
-    logger.warn(
-      `Synchronous SQLiteAdapter not available… falling back to asynchronous operation. This will happen if you're using remote debugger, and may happen if you forgot to recompile native app after WatermelonDB update`,
-    )
-  } else if (options.experimentalUseJSI) {
+  if (options.jsi) {
     if (initializeJSI()) {
       return 'jsi'
     }
